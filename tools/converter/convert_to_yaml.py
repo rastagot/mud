@@ -3520,6 +3520,11 @@ def parse_zon_file(filepath):
         if not vnum_match:
             return None
         zone['vnum'] = int(vnum_match.group(1))
+        # Файл 2000.zon в мире Зеркала начинается с #16 и иначе затирает
+        # настоящую зону 16, растягивая её top до 200099.
+        file_vnum = Path(filepath).stem
+        if file_vnum.isdigit() and int(file_vnum) != zone['vnum']:
+            zone['vnum'] = int(file_vnum)
         idx += 1
 
         # Zone name until ~

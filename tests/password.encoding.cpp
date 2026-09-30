@@ -10,6 +10,7 @@
 // в памяти.
 
 #include "administration/password.h"
+#include "engine/entities/char_player.h"
 #include "utils/native_text.h"
 
 #include <gtest/gtest.h>
@@ -32,6 +33,28 @@ TEST(PasswordEncoding, WrongCyrillicPasswordIsRejected) {
 	const std::string hash = Password::generate_md5_hash(kCyrillic);
 	const std::string other = kCyrillic + "\xD1\x8B";   // тот же пароль плюс "ы"
 	EXPECT_FALSE(Password::compare_password(hash, other));
+}
+
+TEST(PasswordEncoding, Md5CryptKnownVector) {
+	// glibc crypt("password", "$1$salt$"). Хэш целиком ASCII.
+	const std::string hash = Password::md5_crypt("password", "$1$salt$");
+	EXPECT_EQ(hash, "$1$salt$qJH7.N4xYta3aEG/dfqo/0");
+	EXPECT_TRUE(Password::compare_password(hash, "password"));
+	for (const unsigned char byte : hash) {
+		EXPECT_LT(byte, 128u);
+	}
+}
+
+TEST(PasswordEncoding, PlaintextPasswordIsUpgraded) {
+	Player ch;
+	ch.set_passwd(kCyrillic);
+	EXPECT_TRUE(Password::compare_password(&ch, kCyrillic));
+	EXPECT_EQ(ch.get_passwd().compare(0, 3, "$1$"), 0);
+	EXPECT_TRUE(Password::compare_password(&ch, kCyrillic));
+
+	ch.set_passwd(native_text::to_koi8(kCyrillic));
+	EXPECT_TRUE(Password::compare_password(&ch, kCyrillic));
+	EXPECT_EQ(ch.get_passwd().compare(0, 3, "$1$"), 0);
 }
 
 TEST(PasswordEncoding, HashIsTakenOverTheLegacyForm) {
@@ -64,6 +87,17 @@ TEST(PasswordEncoding, AsciiIsUnaffected) {
 	const std::string hash = Password::generate_md5_hash("parolparol");
 	EXPECT_TRUE(Password::compare_password(hash, "parolparol"));
 	EXPECT_FALSE(Password::compare_password(hash, "xarolparol"));
+}
+
+TEST(PasswordEncoding, ConfirmationMatchesStoredPassword) {
+	// Регистрация сравнивает повтор через перегрузку с персонажем, а не со строкой
+	// хэша. Пароли длиннее 10 символов и расходятся в хвосте: старый DES-срез
+	// strncmp(..., 10) принял бы чужой повтор за свой.
+	Player ch;
+	const std::string password = "1234567890abc";
+	Password::set_password(&ch, password);
+	EXPECT_TRUE(Password::compare_password(&ch, password));
+	EXPECT_FALSE(Password::compare_password(&ch, "1234567890xyz"));
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

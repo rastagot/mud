@@ -9,20 +9,6 @@
 #include <sstream>
 #include "engine/db/player_index.h"
 
-#if defined(NOCRYPT)
-#define CRYPT(a,b) ((char *) (a))
-#else
-#if defined(__unix__) || defined(__unix) || defined(__APPLE__)
-#include <sys/param.h>
-#endif
-#ifdef BSD
-#include <unistd.h>
-#else
-#include <crypt.h>
-#endif
-#define CRYPT(a, b) ((char *) crypt((a),(b)))
-#endif
-
 std::unordered_map<std::string, std::shared_ptr<Account>> accounts;
 std::shared_ptr<Account> Account::get_account(const std::string &email) {
 	if (accounts.contains(email)) {
@@ -245,11 +231,14 @@ void Account::set_password(const std::string &password) {
 }
 
 bool Account::compare_password(const std::string &password) {
-	// Тот же приём, что в Password::compare_password: хэши посчитаны по кои-восьмым байтам,
-	// поэтому пароль приводим к той же форме перед crypt. Это формат сохранённых хэшей,
-	// а не кодировка диска.
-	return CompareParam(this->hash_password,
-						CRYPT(native_text::to_koi8(password).c_str(), this->hash_password.c_str()), true);
+	if (!Password::compare_password(this->hash_password, password)) {
+		return false;
+	}
+	// Открытый пароль из сборки без crypt() после удачного входа становится "$1$".
+	if (this->hash_password.compare(0, 3, "$1$") != 0) {
+		this->set_password(password);
+	}
+	return true;
 }
 
 bool Account::quest_is_available(int id) {

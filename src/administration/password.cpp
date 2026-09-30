@@ -6,16 +6,15 @@
 #include <unistd.h>
 #endif
 #include "password.h"
+#include "md5_crypt.h"
 #include "engine/ui/interpreter.h"
 #include "engine/entities/char_data.h"
 #include "engine/entities/char_player.h"
 #include "utils/native_text.h"
 // для ручного отключения крипования (на локалке лучше собирайте через make test и не парьтесь)
 //#define NOCRYPT
-// в случае сборки без криптования просто пишем пароль в открытом виде
-#if defined(NOCRYPT)
-#define CRYPT(a,b) ((char *) (a))
-#else
+// Без crypt() (Windows) тот же "$1$" считает md5_crypt, а не открытый пароль.
+#ifndef NOCRYPT
 #if defined(__unix__) || defined(__unix) || defined(__APPLE__)
 #include <sys/param.h>
 #endif
@@ -43,12 +42,6 @@ const unsigned int MAX_PWD_LENGTH = 50;
 
 // * Генерация хэша с более-менее рандомным сальтом
 std::string generate_md5_hash(const std::string &pwd) {
-#ifdef NOCRYPT
-	// И здесь та же форма: сравнение всё равно приводит пароль к ней, а хранить
-	// UTF-8 значило бы, что кириллический пароль не сойдётся сам с собой. Сборки
-	// без crypt() -- это Windows, macOS и -Dnocrypt=true.
-	return password_bytes(pwd);
-#else
 	char key[14];
 	key[0] = '$';
 	key[1] = '1';
@@ -66,6 +59,11 @@ std::string generate_md5_hash(const std::string &pwd) {
 	}
 	key[12] = '$';
 	key[13] = '\0';
+	// Хэш считается по кои-восьмым байтам и пишется ASCII-строкой "$1$...".
+	// На Windows crypt() нет — тот же алгоритм в md5_crypt.
+#ifdef NOCRYPT
+	return md5_crypt(password_bytes(pwd), key);
+#else
 	return CRYPT(password_bytes(pwd).c_str(), key);
 #endif
 }
@@ -117,23 +115,42 @@ bool get_password_type(const CharData *ch) {
 * Сравнение хэшей и конверт при необходимости в мд5
 * \return 0 - не сошлось, 1 - сошлось
 */
+static bool hash_matches(const std::string &stored, const std::string &pwd) {
+	const std::string bytes = password_bytes(pwd);
+#ifdef NOCRYPT
+	return CompareParam(stored, md5_crypt(bytes, stored), true);
+#else
+	return CompareParam(stored, CRYPT(bytes.c_str(), stored.c_str()), true);
+#endif
+}
+
+// Открытый пароль остался в локальных сейвах, записанных без crypt().
+static bool plaintext_matches(const std::string &stored, const std::string &pwd) {
+	return stored == pwd || stored == password_bytes(pwd);
+}
+
 bool compare_password(CharData *ch, const std::string &pwd) {
-	bool result = 0;
-	if (get_password_type(ch))
-		result = CompareParam(ch->get_passwd(), CRYPT(password_bytes(pwd).c_str(), ch->get_passwd().c_str()), 1);
-	else {
-		// если пароль des сошелся - конвертим сразу в md5 (10 - бывший MAX_PWD_LENGTH)
-		char *s = (char *) CRYPT(password_bytes(pwd).c_str(), ch->get_passwd().c_str());
-		if (s && !strncmp(s, ch->get_passwd().c_str(), 10)) {
-			set_password(ch, pwd);
-			result = 1;
-		} else if (s == nullptr) {
-			SendMsgToChar("Возникли проблемы при проверке вашего пароля. Обратитесь к старшим богам для его сброса.\r\n",
-						 ch);
-			result = 0;
-		}
+	const std::string &stored = ch->get_passwd();
+	if (get_password_type(ch)) {
+		return hash_matches(stored, pwd);
 	}
-	return result;
+	if (plaintext_matches(stored, pwd)) {
+		set_password(ch, pwd);
+		return true;
+	}
+#ifndef NOCRYPT
+	// если пароль des сошелся - конвертим сразу в md5 (10 - бывший MAX_PWD_LENGTH)
+	char *s = (char *) CRYPT(password_bytes(pwd).c_str(), stored.c_str());
+	if (s && !strncmp(s, stored.c_str(), 10)) {
+		set_password(ch, pwd);
+		return true;
+	}
+	if (s == nullptr) {
+		SendMsgToChar("Возникли проблемы при проверке вашего пароля. Обратитесь к старшим богам для его сброса.\r\n",
+					 ch);
+	}
+#endif
+	return false;
 }
 
 /**
@@ -163,7 +180,17 @@ bool check_password(const CharData *ch, const char *pwd) {
 * \return 0 - не сошлось, 1 - сошлось
 */
 bool compare_password(std::string const &hash, std::string const &pass) {
-	return CompareParam(hash.c_str(), CRYPT(password_bytes(pass).c_str(), hash.c_str()), 1);
+	if (CompareParam("$1$", hash)) {
+		return hash_matches(hash, pass);
+	}
+	if (plaintext_matches(hash, pass)) {
+		return true;
+	}
+#ifndef NOCRYPT
+	return CompareParam(hash, CRYPT(password_bytes(pass).c_str(), hash.c_str()), true);
+#else
+	return false;
+#endif
 }
 
 } // namespace Password

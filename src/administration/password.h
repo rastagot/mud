@@ -8,6 +8,8 @@
 #include "engine/core/conf.h"
 #include <string>
 
+#include "administration/md5_crypt.h"
+
 #include "engine/core/sysdep.h"
 #include "engine/structs/structs.h"
 
